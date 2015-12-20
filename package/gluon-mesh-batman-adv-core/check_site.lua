@@ -1,14 +1,4 @@
-need_string('regdom')
-
 for _, config in ipairs({'wifi24', 'wifi5'}) do
-   need_number(config .. '.channel')
-   need_string(config .. '.htmode')
-
-   if need_table(config .. '.ap', nil, false) then
-      need_string(config .. '.ap.ssid')
-      need_boolean(config .. '.ap.disabled', false)
-   end
-
    if need_table(config .. '.ibss', nil, false) then
       need_string(config .. '.ibss.ssid')
       need_string_match(config .. '.ibss.bssid', '^%x[02468aAcCeE]:%x%x:%x%x:%x%x:%x%x:%x%x$')
@@ -26,3 +16,7 @@ end
 
 need_boolean('mesh_on_wan', false)
 need_boolean('mesh_on_lan', false)
+
+if need_table('mesh', nil, false) and  need_table('mesh.batman_adv', nil, false) then
+   need_number('mesh.batman_adv.gw_sel_class', false)
+end

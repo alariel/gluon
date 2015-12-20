@@ -6,39 +6,24 @@ local util = require 'gluon.util'
 local uci = require('luci.model.uci').cursor()
 
 
-local function is_disabled(config, name)
-  local disabled = config and config.disabled
+local function is_disabled(name)
   if uci:get('wireless', name) then
-    disabled = uci:get_bool('wireless', name, 'disabled')
-  end
-
-  return disabled and 1 or 0
-end
-
-local function configure_client(config, radio, index, suffix)
-  local name = 'client_' .. radio
-  local disabled = is_disabled(config, name)
-
-  uci:delete('wireless', name)
-
-  if config then
-    uci:section('wireless', 'wifi-iface', name,
-      {
-        device = radio,
-        network = 'client',
-        mode = 'ap',
-        ssid = config.ssid,
-        macaddr = util.generate_mac(2, index),
-        ifname = suffix and 'client' .. suffix,
-        disabled = disabled,
-      }
-    )
+    return uci:get_bool('wireless', name, 'disabled')
   end
 end
 
-local function configure_ibss(config, radio, index, suffix)
+-- Returns the first argument that is not nil; don't call without any non-nil arguments!
+local function first_non_nil(first, ...)
+  if first ~= nil then
+    return first
+  else
+    return first_non_nil(...)
+  end
+end
+
+
+local function configure_ibss(config, radio, index, suffix, disabled)
   local name = 'ibss_' .. radio
-  local disabled = is_disabled(config, name)
 
   uci:delete('network', name)
   uci:delete('network', name .. '_vlan')
@@ -78,15 +63,16 @@ local function configure_ibss(config, radio, index, suffix)
         macaddr = util.generate_mac(3, index),
         mcast_rate = config.mcast_rate,
         ifname = suffix and 'ibss' .. suffix,
-        disabled = disabled,
+        disabled = disabled and 1 or 0,
       }
     )
   end
 end
 
-local function configure_mesh(config, radio, index, suffix)
+local function configure_mesh(config, radio, index, suffix, disabled)
   local name = 'mesh_' .. radio
-  local disabled = is_disabled(config, name)
+  local macfilter = uci:get('wireless', name, 'macfilter')
+  local maclist = uci:get('wireless', name, 'maclist')
 
   uci:delete('network', name)
   uci:delete('wireless', name)
@@ -109,7 +95,9 @@ local function configure_mesh(config, radio, index, suffix)
         macaddr = util.generate_mac(5, index),
         mcast_rate = config.mcast_rate,
         ifname = suffix and 'mesh' .. suffix,
-        disabled = disabled,
+        disabled = disabled and 1 or 0,
+        macfilter = macfilter,
+        maclist = maclist,
       }
     )
   end
@@ -118,36 +106,28 @@ end
 local function configure_radio(radio, index, config)
   local suffix = radio:match('^radio(%d+)$')
 
-  uci:delete('wireless', radio, 'disabled')
+  local ibss_disabled = is_disabled('ibss_' .. radio)
+  local mesh_disabled = is_disabled('mesh_' .. radio)
 
-  uci:set('wireless', radio, 'channel', config.channel)
-  uci:set('wireless', radio, 'htmode', config.htmode)
-  uci:set('wireless', radio, 'country', site.regdom)
-
-  configure_client(config.ap, radio, index, suffix)
-  configure_ibss(config.ibss, radio, index, suffix)
-  configure_mesh(config.mesh, radio, index, suffix)
+  configure_ibss(config.ibss, radio, index, suffix,
+                 first_non_nil(
+                   ibss_disabled,
+                   mesh_disabled,
+                   (config.ibss or {}).disabled, -- will be nil if config.ibss or config.ibss.disabled is unset
+                   false
+                 )
+  )
+  configure_mesh(config.mesh, radio, index, suffix,
+                 first_non_nil(
+                   mesh_disabled,
+                   ibss_disabled,
+                   (config.mesh or {}).disabled, -- will be nil if config.mesh or config.mesh.disabled is unset
+                   false
+                 )
+  )
 end
 
-
-local radios = {}
-
-uci:foreach('wireless', 'wifi-device',
-  function(s)
-    table.insert(radios, s['.name'])
-  end
-)
-
-for index, radio in ipairs(radios) do
-  local hwmode = uci:get('wireless', radio, 'hwmode')
-
-  if hwmode == '11g' or hwmode == '11ng' then
-    configure_radio(radio, index, site.wifi24)
-  elseif hwmode == '11a' or hwmode == '11na' then
-    configure_radio(radio, index, site.wifi5)
-  end
-end
-
+util.iterate_radios(configure_radio)
 
 uci:save('wireless')
 uci:save('network')
